@@ -10,9 +10,8 @@ from email.utils import parseaddr
 from datetime import datetime
 
 # --- Nastavení ---
-slozka = r"C:\Users\sd232665\OneDrive - Česká televize\Plocha\EDM Doručené maily\test"
-vystup_csv = "vystup.csv" # Výstup z skriptu se ukládá do aktuálního pracovního adresáře skriptu
-max_soubory = 28000
+slozka = r"C:\Users\sd232665\OneDrive - Česká televize\Plocha\EDM Doručené maily\ExportovaneSoubory_faktury_5_11_2025"
+max_soubory = 500
 
 # --- Pomocné funkce ---
 def ziskat_id(nazev):
@@ -25,6 +24,28 @@ def extrahuj_email(text):
 def je_validni_email(email):
     """Kontroluje, zda je e-mailová adresa validní."""
     return bool(re.match(r'^[^@\s]+@[^@\s]+\.[a-zA-Z0-9]+$', email))
+
+def strip_html(text):
+    """Odstraní HTML tagy z textu."""
+    return re.sub(r'<[^>]+>', ' ', text)
+
+def safe_get_content(part):
+    """Bezpečně získá obsah MIME partu, vrací '' při chybě."""
+    try:
+        return part.get_content()
+    except Exception:
+        return ''
+
+def extrahuj_emaily_z_tela(obsah, emaily):
+    """Hledá e-maily v těle zprávy za From:/Od: a vrací rozšířený seznam."""
+    # Stripneme HTML tagy pro spolehlivější regex
+    cisty_obsah = strip_html(obsah)
+    for m in re.findall(r'^(?:From|Od):\s*(.+?@.+?)$', cisty_obsah,
+                        flags=re.MULTILINE | re.IGNORECASE):
+        e = extrahuj_email(m)
+        if e and je_validni_email(e) and e not in emaily:
+            emaily.append(e)
+    return emaily
 
 def zpracuj_eml(cesta):
     try:
@@ -57,7 +78,6 @@ def zpracuj_eml(cesta):
         # 3) Fallback na file modification time
         if not recv_dt:
             try:
-                import os
                 mtime = os.path.getmtime(cesta)
                 recv_dt = datetime.fromtimestamp(mtime)
                 print(f"[EML] Použit file mtime pro {os.path.basename(cesta)}")
@@ -70,15 +90,14 @@ def zpracuj_eml(cesta):
         if hlavni and je_validni_email(hlavni):
             emaily.append(hlavni)
         if msg.is_multipart():
-            obsah = "\n".join(p.get_content() for p in msg.walk()
+            obsah = "\n".join(safe_get_content(p) for p in msg.walk()
                               if p.get_content_type() in ('text/plain','text/html'))
         else:
-            obsah = msg.get_content()
-        for m in re.findall(r'^From:\s+(.+?@.+?)$', obsah,
-                            flags=re.MULTILINE|re.IGNORECASE):
-            e = extrahuj_email(m)
-            if e and je_validni_email(e) and e not in emaily:
-                emaily.append(e)
+            try:
+                obsah = msg.get_content()
+            except Exception:
+                obsah = ''
+        extrahuj_emaily_z_tela(obsah, emaily)
 
         return recv_dt, emaily
 
@@ -135,11 +154,7 @@ def zpracuj_msg(cesta_k_souboru):
         if hlavni and je_validni_email(hlavni):
             emaily.append(hlavni)
 
-        for nalezeny in re.findall(r'^From:\s+(.+?@.+?)$', msg.body or '',
-                                   flags=re.MULTILINE|re.IGNORECASE):
-            e = extrahuj_email(nalezeny)
-            if e and je_validni_email(e) and e not in emaily:
-                emaily.append(e)
+        extrahuj_emaily_z_tela(msg.body or '', emaily)
 
         return recv_dt, emaily
     
@@ -180,37 +195,37 @@ for nazev_souboru in os.listdir(slozka):
     pocet += 1
 
 # --- Zápis do CSV (vystup_all.csv) ---
-max_pocet_emailu = max(len(z) - 2 for z in zaznamy)  # -1 kvůli ID
-hlavicka = ['id_souboru', 'datum_prijeti'] + [f'email{i+1}' for i in range(max_pocet_emailu)]
+if not zaznamy:
+    print("Žádné soubory ke zpracování.")
+else:
+    max_pocet_emailu = max((len(z) - 2 for z in zaznamy), default=0)  # -2 kvůli ID a datu
+    hlavicka = ['id_souboru', 'datum_prijeti'] + [f'email{i+1}' for i in range(max_pocet_emailu)]
 
-with open("vystup_all.csv", mode='w', encoding='utf-8', newline='') as f:
-    writer = csv.writer(f, delimiter=';')
-    writer.writerow(hlavicka)
-    writer.writerows(zaznamy)
+    with open("vystup_all.csv", mode='w', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f, delimiter=';')
+        writer.writerow(hlavicka)
+        writer.writerows(zaznamy)
 
-print(f"\nVýstup uložen do: vystup_all.csv")
+    print(f"\nVýstup uložen do: vystup_all.csv")
 
-# --- Filtrace a zápis do CSV (vystup_bez_ct_email.csv) ---
-# Zachování pozic emailů v řetězci komunikace - CT emaily nahrazeny prázdnými řetězci
-zaznamy_bez_ct = [
-    [identifikator, datum_prijeti] + [email if not re.search(r'@ceskatelevize\.cz$', email) else "" for email in emaily]
-    for identifikator, datum_prijeti, *emaily in zaznamy  # Opraveno rozbalení
-]
+    # --- Filtrace a zápis do CSV (vystup_bez_ct_email.csv) ---
+    # Zachování pozic emailů v řetězci komunikace - CT emaily nahrazeny prázdnými řetězci
+    zaznamy_bez_ct = [
+        [identifikator, datum_prijeti] + [email if not re.search(r'@ceskatelevize\.cz$', email) else "" for email in emaily]
+        for identifikator, datum_prijeti, *emaily in zaznamy  # Opraveno rozbalení
+    ]
 
-max_pocet_emailu_bez_ct = max(len(z) - 2 for z in zaznamy_bez_ct)  # -2 kvůli ID a datu
-hlavicka_bez_ct = ['id_souboru', 'datum_prijeti'] + [f'email{i+1}' for i in range(max_pocet_emailu_bez_ct)]
+    max_pocet_emailu_bez_ct = max((len(z) - 2 for z in zaznamy_bez_ct), default=0)  # -2 kvůli ID a datu
+    hlavicka_bez_ct = ['id_souboru', 'datum_prijeti'] + [f'email{i+1}' for i in range(max_pocet_emailu_bez_ct)]
 
-with open("vystup_bez_ct_email.csv", mode='w', encoding='utf-8', newline='') as f:
-    writer = csv.writer(f, delimiter=';')
-    writer.writerow(hlavicka_bez_ct)
-    writer.writerows(zaznamy_bez_ct)
+    with open("vystup_bez_ct_email.csv", mode='w', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f, delimiter=';')
+        writer.writerow(hlavicka_bez_ct)
+        writer.writerows(zaznamy_bez_ct)
 
-print(f"\nVýstup uložen do: vystup_bez_ct_email.csv")
+    print(f"Výstup uložen do: vystup_bez_ct_email.csv")
 
 # --- Výpis délky běhu ---
-end_time = time.time()  # Record end time
-print(f"Délka běhu skriptu: {end_time - start_time:.2f} sekund")
-print(f"Zpracováno {pocet} souborů")
-print(f"Výstup uložen do: vystup_all.csv")
-print(f"Výstup uložen do: vystup_bez_ct_email.csv")
+end_time = time.time()
+print(f"\nZpracováno {pocet} souborů")
 print(f"Délka běhu: {end_time - start_time:.2f} s")
