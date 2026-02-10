@@ -10,8 +10,8 @@ from email.utils import parseaddr
 from datetime import datetime
 
 # --- Nastavení ---
-slozka = r"C:\Users\sd232665\OneDrive - Česká televize\Plocha\EDM Doručené maily\ExportovaneSoubory_faktury_5_11_2025"
-max_soubory = 500
+slozka = r"C:\Users\sd232665\OneDrive - Česká televize\Plocha\EDM Doručené maily\ExportovaneSoubory_faktury_9_2_2026\ExportovaneSoubory_faktury"
+max_soubory = 25000
 
 # --- Pomocné funkce ---
 def ziskat_id(nazev):
@@ -113,7 +113,7 @@ def zpracuj_msg(cesta_k_souboru):
         recv_dt = None
         
         # Rozšířené ladění
-        print(f"[MSG DEBUG] Zpracovávám: {os.path.basename(cesta_k_souboru)}")
+        # print(f"[MSG DEBUG] Zpracovávám: {os.path.basename(cesta_k_souboru)}")
         
         # 1) Raw headers
         try:
@@ -171,6 +171,8 @@ start_time = time.time()  # Record start time
 # --- Zpracování a zápis do CSV ---
 zaznamy = []
 pocet = 0
+pocet_chyb_datum = 0
+pocet_bez_emailu = 0
 
 for nazev_souboru in os.listdir(slozka):
     if pocet >= max_soubory:
@@ -189,7 +191,19 @@ for nazev_souboru in os.listdir(slozka):
         recv_dt, emaily = zpracuj_msg(cesta)
 
     dt_str = recv_dt.strftime('%Y-%m-%d %H:%M:%S') if recv_dt else ''
-    print(f"{identifikator} | {dt_str} -> {';'.join(emaily)}")
+    
+    # Varování při neúplném zpracování
+    if not recv_dt or not emaily:
+        varování = []
+        if not recv_dt:
+            varování.append("CHYBÍ DATUM")
+            pocet_chyb_datum += 1
+        if not emaily:
+            varování.append("ŽÁDNÉ EMAILY")
+            pocet_bez_emailu += 1
+        print(f"⚠️ {identifikator} | {dt_str} -> {';'.join(emaily)} [{', '.join(varování)}]")
+    else:
+        print(f"{identifikator} | {dt_str} -> {';'.join(emaily)}")
 
     zaznamy.append([identifikator, dt_str] + emaily)
     pocet += 1
@@ -228,4 +242,8 @@ else:
 # --- Výpis délky běhu ---
 end_time = time.time()
 print(f"\nZpracováno {pocet} souborů")
+if pocet_chyb_datum > 0:
+    print(f"⚠️ Souborů s chybějícím datem: {pocet_chyb_datum}")
+if pocet_bez_emailu > 0:
+    print(f"⚠️ Souborů bez emailů: {pocet_bez_emailu}")
 print(f"Délka běhu: {end_time - start_time:.2f} s")
